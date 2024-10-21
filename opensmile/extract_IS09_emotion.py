@@ -2,50 +2,82 @@ import os
 import time
 import torch
 import torchaudio
+import sys
+from multiprocessing import Pool, cpu_count
+import pandas as pd
+import opensmile
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from datasets.IemocapDataset import IemocapDataset
 
-# Log start time
-start_time = time.time()
+def process_segment(segment, emotion, filename, output_file_name, smile, specgram_transform):
+    try:
+        # Ensure the segment is 2D by adding the channel dimension
+        segment_2d = segment.unsqueeze(0)  # Shape: [1, num_frames]
 
-# Specify file path and name (include file extension)
-config_file_path = 'config/IS09_emotion.conf'
-output_file_name = 'iemocap_is09_emotion.csv'
+        # Unique filename for each process
+        segment_filename = f'segment_{os.getpid()}.wav'
+        torchaudio.save(segment_filename, segment_2d, sample_rate=16000)
 
-# Load dataset and construct dataloader
-dataset = IemocapDataset('/home/alanwuha/Documents/Projects/datasets/iemocap/IEMOCAP_full_release')
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=IemocapDataset.collate_fn_segments)
+        # Extract emotion features using OpenSMILE
+        features = smile.process_file(segment_filename)
 
-# Remove output file if exists
-if os.path.exists(output_file_name):
-    os.system('rm ' + output_file_name)
+        # Append the features to the output CSV
+        if not os.path.exists(output_file_name):
+            features.to_csv(output_file_name, index=False)
+        else:
+            features.to_csv(output_file_name, mode='a', header=False, index=False)
 
-# Initialize stft spectrogram transform
-specgram_transform = torchaudio.transforms.Spectrogram(n_fft=256, win_length=256, hop_length=128)
+        # Extract spectrograms using torchaudio transform
+        specgram = specgram_transform(segment_2d)
+        
+        os.remove(segment_filename)  # Remove the temporary .wav file
+        return specgram  # Return the spectrogram if needed for further processing
 
-# Iterate through dataset using dataloader to get segments of each utterance
-for segments, emotions, n_segments, filenames in dataloader:
-    # For each segment,
-    # 1. Extract 384d IS09 Emotion features using SMILExtract
-    # 2. Extract 32x129 spectogram using torchaudio transform (16ms frame size, 8ms step size, 256 fft bins)
-    for i in range(len(segments)):
-        # 1. Save segment as .wav file and extract 384d IS09 emotion features using SMILExtract
-        torchaudio.save('segment.wav', segments[i], sample_rate=16000, precision=16, channels_first=False)
-        execute_string = 'SMILExtract -C ' + config_file_path + ' -I ' + 'segment.wav' + ' -csvoutput ' + output_file_name + ' -instname ' + str(i) + '_' + filenames[i]
-        os.system(execute_string)
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return None
 
-        # 2. Extract 32x129 spectrograms using torchaudio transform (16ms frame size, 8ms step size, 256 fft bins)
-        specgram = specgram_transform(segments[i].view(1, -1))
+def main():
+    # Log start time
+    start_time = time.time()
 
-# Iterate through dataset and extract features of each sample using SMILExtract
-# For os.system(execute_string) to work on Linux:
-# 1. Ensure that SMILExtract executable exists in /usr/local/bin.
-# 2. Ensure that SMILExtract executable can be executed without sudo.
-#    - This can be achieved by granting all users with the permission to execute the SMILExtract executable using the following command: chmod a+x /usr/local/bin/SMILExtract
-# for i in range(len(dataset)):
-#     execute_string = 'SMILExtract -C ' + config_file_path + ' -I ' + dataset[i]['path'] + ' -csvoutput ' + output_file_name
-#     os.system(execute_string)
+    # Specify file path and name (include file extension)
+    output_file_name = 'iemocap_GeMAPSv01b_emotion.csv'
 
-# Compute and print program execution time
-end_time = time.time()
-total_time = end_time - start_time
-print('Program took %d min %d sec to complete' % (total_time // 60, total_time % 60))
+    # Load dataset and construct dataloader
+    dataset = IemocapDataset(r"M:\SOL\Sentiment_detection\IEMOCAP\IEMOCAP_full_release")
+    dataloader = torch.utils.data.DataLoader(dataset, 
+                                             batch_size=16, 
+                                             shuffle=False, 
+                                             collate_fn=IemocapDataset.collate_fn_segments)
+
+    # Remove output file if exists
+    if os.path.exists(output_file_name):
+        os.remove(output_file_name)
+
+    # Initialize OpenSMILE
+    smile = opensmile.Smile(
+        feature_set=opensmile.FeatureSet.GeMAPSv01b,
+        feature_level=opensmile.FeatureLevel.Functionals,
+    )
+
+    # Initialize stft spectrogram transform
+    specgram_transform = torchaudio.transforms.Spectrogram(n_fft=256, 
+                                                           win_length=256, 
+                                                           hop_length=128)
+    
+    # # Initialize MEL spectrogram transform
+    # specgram_transform = torchaudio.transforms.MelSpectrogram(n_fft=512, win_length=512, hop_length=256, n_mels=80)
+
+    # Iterate through dataset using dataloader to get segments of each utterance
+    for segments, emotions, n_segments, filenames in dataloader:
+        with Pool(cpu_count()) as pool:pool.starmap(process_segment, [(segment, emotion, filename, output_file_name, smile, specgram_transform) for segment, emotion, filename in zip(segments, emotions, filenames)])
+
+    # Compute and print program execution time
+    end_time = time.time()
+    total_time = end_time - start_time
+    print('Program took %d min %d sec to complete' % (total_time // 60, total_time % 60))
+
+if __name__ == '__main__':
+    main()

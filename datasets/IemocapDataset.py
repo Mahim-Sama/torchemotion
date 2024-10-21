@@ -51,12 +51,29 @@ class IemocapDataset(object):
 
         # Get session number, script/impro, speaker gender, utterance number
         data = [d + [d[2][4], d[2].split('_')[1], d[2][-4], d[2][-3:]] for d in data]
+        #print(data[:10])
 
         # Create pandas dataframe
-        self.df = pd.DataFrame(data, columns=['start', 'end', 'file', 'emotion', 'activation', 'valence', 'dominance', 'session', 'script_impro', 'gender', 'utterance'], dtype=np.float32)
+        self.secondary_df = pd.DataFrame(data, columns=['start', 'end', 'file', 'emotion', 'activation', 'valence', 
+                                              'dominance', 'session', 'script_impro', 'gender', 'utterance'])
+        #print(self.df.head(6))
+        
+        # self.df = self.secondary_df.copy().head(500)
+        self.df = self.secondary_df.sample(frac=0.3, random_state=1).reset_index(drop=True).copy()
+        
+        string_cols = ['file', 'emotion', 'script_impro', 'gender']
+        for col in string_cols:
+            self.df[col] = self.df[col].astype(str) #astype(pd.StringDtype())
+        
+        for col in self.df.columns:
+            if col not in string_cols:
+                self.df[col] = pd.to_numeric(self.df[col], errors='coerce').astype(np.float32)
 
+        print(self.df.dtypes)
+        
         # Filter by emotions
         filtered_emotions = self.df['emotion'].isin(emotions)
+        # print(filtered_emotions)
         self.df = self.df[filtered_emotions]
 
         # Filter by sessions
@@ -64,11 +81,12 @@ class IemocapDataset(object):
         self.df = self.df[filtered_sessions]
 
         # Filter by script_impro
-        filtered_script_impro = self.df['script_impro'].str.contains('|'.join(script_impro))
+        filtered_script_impro = self.df['script_impro'].astype(str).str.contains('|'.join(script_impro))
         self.df = self.df[filtered_script_impro]
 
         # Filter by gender
         filtered_genders = self.df['gender'].isin(genders)
+        # print(filtered_genders)
         self.df = self.df[filtered_genders]
 
         # Reset indices
@@ -110,7 +128,7 @@ class IemocapDataset(object):
         # Clip or pad each utterance audio into 4.020 seconds.
         sample_rate = 16000
         n_channels = 1
-        frame_length = np.int(4.020 * sample_rate)
+        frame_length = np.int32(4.020 * sample_rate)
 
         # Initialize output
         waveforms = torch.zeros(0, n_channels, frame_length)
@@ -128,8 +146,8 @@ class IemocapDataset(object):
     def collate_fn_segments(batch):
         # Segment each sample into 264ms frames and 25ms sliding window
         sample_rate = 16000
-        segment_length = np.int(0.264 * sample_rate)
-        step_length = np.int(0.025 * sample_rate)
+        segment_length = np.int32(0.264 * sample_rate)
+        step_length = np.int32(0.025 * sample_rate)
 
         # Initialize output
         segments = torch.zeros(0, segment_length)
@@ -143,7 +161,7 @@ class IemocapDataset(object):
             original_waveform_length = waveform.shape[1]
 
             # Compute number of segments given input waveform, segment, and step lengths
-            item_n_segments = np.int(np.ceil((original_waveform_length - segment_length) / step_length) + 1)
+            item_n_segments = np.int32(np.ceil((original_waveform_length - segment_length) / step_length) + 1)
 
             # Compute and apply padding to waveform
             padding_length = segment_length - original_waveform_length if original_waveform_length < segment_length else (segment_length + (item_n_segments - 1) * step_length - original_waveform_length)
@@ -177,8 +195,8 @@ class IemocapDataset(object):
         # If the speech file does not divide into an even number, pad it with zeros so that it does.
         sample_rate = 16000
         # n_channels = 1
-        frame_length = np.int(0.025 * sample_rate)
-        step_length = np.int(0.01 * sample_rate)
+        frame_length = np.int32(0.025 * sample_rate)
+        step_length = np.int32(0.01 * sample_rate)
 
         # Initialize output
         # frames = torch.zeros(0, n_channels, frame_length)
@@ -191,7 +209,7 @@ class IemocapDataset(object):
             original_waveform_length = waveform.shape[1]
 
             # Compute number of frames given input waveform, frame and step lengths
-            item_n_frames = np.int(np.ceil((original_waveform_length - frame_length) / step_length) + 1)
+            item_n_frames = np.int32(np.ceil((original_waveform_length - frame_length) / step_length) + 1)
 
             # Compute and apply padding to waveform
             padding_length = frame_length - original_waveform_length if original_waveform_length < frame_length else (frame_length + (item_n_frames - 1) * step_length - original_waveform_length)
@@ -216,18 +234,22 @@ class IemocapDataset(object):
 
         return frames, emotions, n_frames
 
-# Example: Load Iemocap dataset
-# iemocap_dataset = IemocapDataset('/home/alanwuha/Documents/Projects/datasets/iemocap/IEMOCAP_full_release')
 
-# Example: Iterate through samples
-# for i in range(len(iemocap_dataset)):
-#     sample = iemocap_dataset[i]
-#     print(i, sample)
+# # Example: Load Iemocap dataset
+# iemocap_dataset = IemocapDataset("M:\SOL\Sentiment_detection\IEMOCAP\IEMOCAP_full_release")
 
-# Number of audio by duration
+# # Example: Iterate through samples
+# # for i in range(10):
+# #     sample = iemocap_dataset[i]
+# #     print(i, sample)
+# print(len(iemocap_dataset))
+# # Number of audio by duration
 # dataset_duration = np.ceil(iemocap_dataset.df['end'] - iemocap_dataset.df['start'])
+# #print(dataset_duration)
 # idx = np.where(dataset_duration == 35)
 # durations = np.unique(dataset_duration)
+# #print(durations)
 # durations_count = [np.sum(dataset_duration == i) for i in durations]
+# #print(durations_count)
 
 # print('End')
